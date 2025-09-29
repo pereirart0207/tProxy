@@ -1,46 +1,53 @@
 require('dotenv').config();
 const express = require('express');
-const bodyParser = require('body-parser');
 const fetch = require('node-fetch');
 
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json({ limit: '50mb' })); // soporta payload grande
 
-// Endpoint universal
+app.get('/', (req, res) => res.send('API mediadora corriendo ✅'));
+
 app.all('/proxy', async (req, res) => {
     try {
-        // URL de destino
         const targetUrl = req.query.url || process.env.DEFAULT_API_URL;
 
-        // Método HTTP
-        const method = req.method;
-
-        // Datos del body o predeterminados
-        const body = Object.keys(req.body).length > 0
-            ? req.body
-            : JSON.parse(process.env.DEFAULT_PAYLOAD);
-
-        // Construir request
-        const fetchOptions = {
-            method,
-            headers: { 'Content-Type': 'application/json' },
-        };
-
-        if (method !== 'GET' && method !== 'HEAD') {
-            fetchOptions.body = JSON.stringify(body);
+        if (!/^https?:\/\//i.test(targetUrl)) {
+            return res.status(400).send('URL debe ser absoluta con http o https');
         }
 
-        // Llamar a la API de destino
-        const response = await fetch(targetUrl, fetchOptions);
-        const data = await response.json();
+        const fetchOptions = {
+            method: req.method,
+            headers: { ...req.headers }, // pasar todos los headers originales
+            redirect: 'manual',
+        };
 
-        res.json(data);
+        // Pasar body si aplica
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+            fetchOptions.body = JSON.stringify(req.body);
+        }
+
+        const response = await fetch(targetUrl, fetchOptions);
+
+        // Pasar todos los headers excepto algunos que pueden romper la respuesta
+        response.headers.forEach((value, key) => {
+            const skip = ['content-encoding', 'transfer-encoding', 'content-length'];
+            if (!skip.includes(key.toLowerCase())) {
+                res.setHeader(key, value);
+            }
+        });
+
+        // Enviar el status exacto
+        res.status(response.status);
+
+        // Enviar el body como buffer para no alterar nada
+        const buffer = await response.buffer();
+        res.send(buffer);
 
     } catch (error) {
         console.error(error);
-        res.status(500).json({ error: error.message });
+        res.status(500).send(error.message);
     }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Mediador corriendo en http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Mediador corriendo en el puerto ${PORT}`));
